@@ -1083,21 +1083,22 @@ def rms_norm(x: AlmeidaTensor, weight: AlmeidaTensor, eps: float = 1e-6) -> Alme
         return result
 
     elif x.ndim == 2:
-        # Batch of vectors (seq_len, hidden_size)
+        # Batch of vectors (seq_len, hidden_size). Work on raw buffers a row at a
+        # time: a C-level slice avoids per-element __getitem__/_multi_to_flat.
         seq_len = x.shape[0]
+        H = hidden_size
         result = AlmeidaTensor(shape=x.shape, dtype=x.dtype)
+        xd, rd, wd = x._buffer._data, result._buffer._data, weight._buffer._data
 
         for s in range(seq_len):
-            # Compute RMS for this position
+            base = s * H
+            row = xd[base:base + H]
             sum_sq = 0.0
-            for h in range(hidden_size):
-                val = x[s, h]
-                sum_sq += val ** 2
-            rms = math.sqrt(sum_sq / hidden_size + eps)
-
-            # Normalize and scale
-            for h in range(hidden_size):
-                result[s, h] = (x[s, h] / rms) * weight._buffer[h]
+            for v in row:
+                sum_sq += v * v
+            inv_rms = 1.0 / math.sqrt(sum_sq / H + eps)
+            for h in range(H):
+                rd[base + h] = row[h] * inv_rms * wd[h]
 
         return result
 
@@ -1147,31 +1148,29 @@ def layer_norm(x: AlmeidaTensor, weight: AlmeidaTensor, bias: Optional[AlmeidaTe
         return result
 
     elif x.ndim == 2:
+        # Work on raw buffers a row at a time: a C-level slice avoids per-element
+        # __getitem__/_multi_to_flat over seq_len * hidden_size elements.
         seq_len = x.shape[0]
+        H = hidden_size
         result = AlmeidaTensor(shape=x.shape, dtype=x.dtype)
+        xd, rd, wd = x._buffer._data, result._buffer._data, weight._buffer._data
+        bd = bias._buffer._data if bias is not None else None
 
         for s in range(seq_len):
-            # Compute mean
-            mean = 0.0
-            for h in range(hidden_size):
-                mean += x[s, h]
-            mean /= hidden_size
-
-            # Compute variance
+            base = s * H
+            row = xd[base:base + H]
+            mean = sum(row) / H
             var = 0.0
-            for h in range(hidden_size):
-                diff = x[s, h] - mean
-                var += diff ** 2
-            var /= hidden_size
-
-            std = math.sqrt(var + eps)
-
-            # Normalize, scale, and shift
-            for h in range(hidden_size):
-                normed = (x[s, h] - mean) / std
-                result[s, h] = normed * weight._buffer[h]
-                if bias is not None:
-                    result[s, h] += bias._buffer[h]
+            for v in row:
+                d = v - mean
+                var += d * d
+            inv_std = 1.0 / math.sqrt(var / H + eps)
+            if bd is None:
+                for h in range(H):
+                    rd[base + h] = (row[h] - mean) * inv_std * wd[h]
+            else:
+                for h in range(H):
+                    rd[base + h] = (row[h] - mean) * inv_std * wd[h] + bd[h]
 
         return result
 
