@@ -536,6 +536,17 @@ class AlmeidaTensor:
         new_shape = tuple(self._shape[i] for i in axes)
         result = AlmeidaTensor(shape=new_shape, dtype=self._dtype)
 
+        # Fast path: 2D transpose on flat buffers (the common .T), no per-element
+        # _flat_to_multi/_multi_to_flat round-trip.
+        if self.ndim == 2 and tuple(axes) == (1, 0):
+            m, n = self._shape
+            sd, rd = self._buffer._data, result._buffer._data
+            for i in range(m):
+                base = i * n
+                for j in range(n):
+                    rd[j * m + i] = sd[base + j]
+            return result
+
         for flat_idx in range(self.size):
             old_indices = self._flat_to_multi(flat_idx)
             new_indices = tuple(old_indices[i] for i in axes)
@@ -587,8 +598,43 @@ class AlmeidaTensor:
                 return AlmeidaTensor([acc], dtype=self._dtype).reshape((1,) * self.ndim)
             return AlmeidaTensor([acc], dtype=self._dtype)
 
-        # Sum along specific axis
-        return self._reduce_axis(axis, keepdims, lambda a, b: a + b, 0.0)
+        # Sum along a specific axis — specialized (no per-element lambda; the
+        # contiguous inner==1 case reduces each block at C level via sum()).
+        if axis < 0:
+            axis += self.ndim
+        shape = self._shape
+        axis_len = shape[axis]
+        inner = 1
+        for d in shape[axis + 1:]:
+            inner *= d
+        outer = 1
+        for d in shape[:axis]:
+            outer *= d
+
+        new_shape = list(shape)
+        if keepdims:
+            new_shape[axis] = 1
+        else:
+            new_shape = new_shape[:axis] + new_shape[axis + 1:]
+        result = AlmeidaTensor(shape=tuple(new_shape) if new_shape else (1,), dtype=self._dtype)
+        sd, rd = self._buffer._data, result._buffer._data
+        span = axis_len * inner
+
+        if inner == 1:
+            # Reducing the last axis: each output is a contiguous block sum.
+            for o in range(outer):
+                base = o * span
+                rd[o] = sum(sd[base:base + span])
+        else:
+            for o in range(outer):
+                in_o = o * span
+                out_o = o * inner
+                for a in range(axis_len):
+                    in_oa = in_o + a * inner
+                    for b in range(inner):
+                        rd[out_o + b] += sd[in_oa + b]
+
+        return result
 
     def mean(self, axis: Optional[int] = None, keepdims: bool = False) -> 'AlmeidaTensor':
         """Mean along axis or globally."""
@@ -1208,22 +1254,23 @@ def rope_embed(x: AlmeidaTensor, cos: AlmeidaTensor, sin: AlmeidaTensor,
     half_dim = head_dim // 2
 
     result = AlmeidaTensor(shape=x.shape, dtype=x.dtype)
+    # Direct base-offset arithmetic on the flat buffers (inference-path hot loop).
+    xd, rd = x._buffer._data, result._buffer._data
+    cd, sd = cos._buffer._data, sin._buffer._data
 
     for s in range(seq_len):
         pos = position + s
+        cos_base = pos * head_dim
         for h in range(n_heads):
+            base = (s * n_heads + h) * head_dim
             for d in range(half_dim):
-                # Get pair of values
-                x1 = x[s, h, d]
-                x2 = x[s, h, d + half_dim]
-
-                # Get rotation coefficients
-                c = cos[pos, d]
-                si = sin[pos, d]
-
+                x1 = xd[base + d]
+                x2 = xd[base + d + half_dim]
+                c = cd[cos_base + d]
+                si = sd[cos_base + d]
                 # Rotate: [cos, -sin; sin, cos] @ [x1, x2]
-                result[s, h, d] = x1 * c - x2 * si
-                result[s, h, d + half_dim] = x1 * si + x2 * c
+                rd[base + d] = x1 * c - x2 * si
+                rd[base + d + half_dim] = x1 * si + x2 * c
 
     return result
 
