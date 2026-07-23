@@ -122,15 +122,22 @@ def test_linalg():
     Qn, Rn = _np(Q), _np(R)
     check("qr reconstruct A=QR", Qn @ Rn, a)
     check("qr Q orthonormal", Qn.T @ Qn, np.eye(5), rtol=1e-3, atol=1e-3)
-    try:
-        U, S, Vt = at.svd(A)
-        Un, Sn, Vtn = _np(U), _np(S), _np(Vt)
-        recon = Un @ np.diag(Sn.ravel()) @ Vtn
-        check("svd reconstruct A=USV^T", recon, a, rtol=1e-2, atol=1e-2)
-        check("svd singular values descending", np.diff(Sn.ravel()) <= 1e-4,
-              np.ones(Sn.size - 1))
-    except Exception as ex:                        # noqa: BLE001
-        _results.append(("svd", False, float("inf"), f"EXC {type(ex).__name__}: {ex}"))
+    # svd() = one-sided Jacobi (deterministic, fp32-accurate) -> tight tolerances
+    U, S, Vt = at.svd(A)
+    Un, Sn, Vtn = _np(U), _np(S), _np(Vt)
+    check("svd reconstruct A=USV^T", Un @ np.diag(Sn.ravel()) @ Vtn, a, rtol=1e-4, atol=1e-4)
+    check("svd singular values vs numpy", np.sort(Sn.ravel())[::-1],
+          np.linalg.svd(a, compute_uv=False), rtol=1e-4, atol=1e-4)
+    check("svd singular values descending", np.diff(Sn.ravel()) <= 1e-5, np.ones(Sn.size - 1))
+    # wide matrix exercises the transpose path
+    aw = RNG.standard_normal((4, 7)).astype(np.float32)
+    Uw, Sw, Vtw = at.svd(at.from_numpy(aw))
+    check("svd wide (4x7) reconstruct", _np(Uw) @ np.diag(_np(Sw).ravel()) @ _np(Vtw), aw,
+          rtol=1e-4, atol=1e-4)
+    # svd_power_iteration remains a valid top-k alternative (looser, iterative)
+    Up, Sp, Vtp = at.svd_power_iteration(A)
+    check("svd_power_iteration reconstruct", _np(Up) @ np.diag(_np(Sp).ravel()) @ _np(Vtp), a,
+          rtol=1e-2, atol=1e-2)
 
 
 # ---------------------------------------------------------------- extras (utility / NN)

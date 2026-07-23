@@ -15,6 +15,22 @@ Design contract:
     faster than manual index stepping in CPython; the general strided path lets
     a caller walk a matrix row or column in place, with no gather.
 
+Container choice (semantically interchangeable, NOT performance-equivalent):
+    array.array  -> typed, compact PERSISTENT tensor storage
+    list[float]  -> high-speed TRANSIENT arithmetic workspace
+CPython list ops (build/iterate/slice-assign) are faster than the equivalent
+array.array ops, so an algorithm should gather the public row-major tensor into
+a workspace whose *layout and container* suit the algorithm (e.g. QR uses a
+column-major list), then run these kernels over it. Benchmark and choose
+deliberately; both containers work through the same kernels.
+
+Aliasing contract (this is an UNCHECKED layer):
+  * In-place kernels (`scale`, `axpy`, `rot`) require that a destination region
+    and any source region are either identical or NON-overlapping. Partial
+    overlap at different offsets is outside the supported domain: the strided
+    `axpy`/`scale` paths write while reading, so partial aliasing would corrupt
+    results. (QR/SVD callers use disjoint columns, so this holds.)
+
 This module is private (leading underscore) and not part of the public API.
 """
 import array as _array
@@ -84,3 +100,13 @@ def axpy(y, sy, ty, x, sx, tx, alpha, n):
             y[iy] += alpha * x[ix]
             iy += ty
             ix += tx
+
+
+def rot(a, si, sj, c, s, n):
+    """In-place Givens rotation of two contiguous length-n vectors in `a`:
+        col_i, col_j  <-  c*col_i - s*col_j,  s*col_i + c*col_j
+    Used by one-sided Jacobi SVD to orthogonalize a pair of columns."""
+    ci = a[si:si + n]
+    cj = a[sj:sj + n]
+    _store(a, si, n, [c * x - s * y for x, y in zip(ci, cj)])
+    _store(a, sj, n, [s * x + c * y for x, y in zip(ci, cj)])

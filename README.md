@@ -21,16 +21,17 @@ non-zero on any mismatch.
 
 | suite | reference | checks | result |
 |-------|-----------|-------:|:------:|
-| `tests/test_tensor_vs_numpy.py` | NumPy | 59 | ✅ all pass |
+| `tests/test_kernels_vs_numpy.py` | NumPy | 13 | ✅ all pass |
+| `tests/test_tensor_vs_numpy.py` | NumPy | 62 | ✅ all pass |
 | `tests/test_linalg_vs_numpy.py` | NumPy | 38 | ✅ all pass |
 | `tests/test_stats_vs_scipy.py`  | NumPy + SciPy | 63 | ✅ all pass |
-| **total** | | **160** | **all pass** |
+| **total** | | **176** | **all pass** |
 
 Closed-form operations match to machine precision (max error ~1e-16). The hand-written
 decompositions are validated by reconstruction and by their defining invariants:
 
 - **QR** — `A = QR` reconstructs to ~1e-7 (fp32); `Qᵀ Q = I` to 1e-4; `R` upper-triangular.
-- **SVD** — `A = UΣVᵀ` reconstructs to fp32 precision; singular values match NumPy and descend.
+- **SVD** — one-sided Jacobi (deterministic): `A = UΣVᵀ` reconstructs to fp32 precision; singular values match NumPy to machine precision and descend. `svd_power_iteration` remains available for top-k of large matrices.
 - **LU** — `PA = LU`, with `L` lower- and `U` upper-triangular.
 - **Cholesky** — `A = LLᵀ` for SPD inputs.
 - **eig** (symmetric) — eigenvalues match `numpy.linalg.eigvalsh`.

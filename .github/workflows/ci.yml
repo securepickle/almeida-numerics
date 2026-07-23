@@ -31,6 +31,9 @@ jobs:
           # A fresh interpreter that can only see the stdlib + our package.
           python -c "import almeida_numerics as an; t = an.AlmeidaTensor([[1.0,2.0],[3.0,4.0]]); print('core import OK, (a@a)[0,0] =', (t@t)[0,0])"
 
+      - name: internal kernels vs NumPy
+        run: python tests/test_kernels_vs_numpy.py
+
       - name: tensor vs NumPy
         run: python tests/test_tensor_vs_numpy.py
 

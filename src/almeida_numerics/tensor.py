@@ -1407,22 +1407,103 @@ def svd_power_iteration(
     return U, S, Vt
 
 
+def svd_jacobi(
+    A: AlmeidaTensor,
+    max_sweeps: int = 60,
+    tol: float = 1e-12,
+) -> Tuple[AlmeidaTensor, AlmeidaTensor, AlmeidaTensor]:
+    """
+    Thin SVD by one-sided Jacobi rotations:  A = U @ diag(S) @ Vt.
+
+    Deterministic (no random initial vector) and typically far more accurate
+    than power iteration + deflation. It rotates pairs of columns of A to mutual
+    orthogonality; at convergence the column norms are the singular values, the
+    normalized columns are U, and the accumulated rotations form V.
+
+    Returns U (m, k), S (k,), Vt (k, n) with k = min(m, n).
+    """
+    if A.ndim != 2:
+        raise ValueError("SVD requires 2D matrix")
+    m, n = A.shape
+
+    # One-sided Jacobi wants the tall orientation. For wide A, decompose A^T and
+    # swap: A^T = Uᵀ Σ Vtᵀ  =>  A = (Vtᵀ)ᵀ Σ (Uᵀ)ᵀ.
+    if m < n:
+        Ut, St, Vtt = svd_jacobi(A.transpose(), max_sweeps, tol)
+        return Vtt.transpose(), St, Ut.transpose()
+
+    # Column-major workspace lists (column j at [j*m : j*m+m]); V starts as I.
+    ad = A._buffer._data
+    W = [ad[i * n + j] for j in range(n) for i in range(m)]
+    Vw = [0.0] * (n * n)
+    for i in range(n):
+        Vw[i * n + i] = 1.0
+
+    for _sweep in range(max_sweeps):
+        converged = True
+        for i in range(n):
+            ib = i * m
+            for j in range(i + 1, n):
+                jb = j * m
+                alpha = _k.dot(W, ib, 1, W, ib, 1, m)   # ||col_i||^2
+                beta = _k.dot(W, jb, 1, W, jb, 1, m)    # ||col_j||^2
+                gamma = _k.dot(W, ib, 1, W, jb, 1, m)   # col_i . col_j
+                if gamma == 0.0 or abs(gamma) <= tol * math.sqrt(alpha * beta):
+                    continue
+                converged = False
+                zeta = (beta - alpha) / (2.0 * gamma)
+                t = (1.0 if zeta >= 0.0 else -1.0) / (abs(zeta) + math.sqrt(1.0 + zeta * zeta))
+                c = 1.0 / math.sqrt(1.0 + t * t)
+                s = c * t
+                _k.rot(W, ib, jb, c, s, m)              # rotate columns of A
+                _k.rot(Vw, i * n, j * n, c, s, n)       # accumulate into V
+        if converged:
+            break
+
+    # Singular values = column norms; sort descending and permute U, Vt.
+    sigmas = [_k.norm2(W, i * m, 1, m) for i in range(n)]
+    order = sorted(range(n), key=lambda i: sigmas[i], reverse=True)
+
+    k = n
+    U = zeros((m, k))
+    S = zeros((k,))
+    Vt = zeros((k, n))
+    ud, sd, vtd = U._buffer._data, S._buffer._data, Vt._buffer._data
+    for outc, i in enumerate(order):
+        sig = sigmas[i]
+        sd[outc] = sig
+        ib = i * m
+        if sig > 1e-13:
+            inv = 1.0 / sig
+            for r in range(m):
+                ud[r * k + outc] = W[ib + r] * inv
+        # Vt row `outc` is right singular vector v_i = column i of V (contiguous).
+        vbase = i * n
+        obase = outc * n
+        for jj in range(n):
+            vtd[obase + jj] = Vw[vbase + jj]
+
+    return U, S, Vt
+
+
 def svd(A: AlmeidaTensor, full_matrices: bool = False) -> Tuple[AlmeidaTensor, AlmeidaTensor, AlmeidaTensor]:
     """
-    Singular Value Decomposition.
+    Singular Value Decomposition.  A = U @ diag(S) @ Vt.
 
-    A = U @ diag(S) @ Vt
+    Uses one-sided Jacobi (deterministic, accurate) for the full thin SVD. For
+    only the top-k singular triples of a large matrix, `svd_power_iteration` is
+    available as a targeted alternative.
 
     Args:
         A: Matrix of shape (m, n)
-        full_matrices: If False, return reduced SVD
+        full_matrices: If False, return the reduced (thin) SVD
 
     Returns:
         U: Left singular vectors
-        S: Singular values
+        S: Singular values (descending)
         Vt: Right singular vectors
     """
-    return svd_power_iteration(A)
+    return svd_jacobi(A)
 
 
 def diag(v: AlmeidaTensor) -> AlmeidaTensor:

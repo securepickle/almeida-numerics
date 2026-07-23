@@ -74,8 +74,20 @@ def test_axpy():
     check("axpy strided (list)", yl, exp)
 
 
+def test_rot():
+    import math
+    ci = RNG.standard_normal(8); cj = RNG.standard_normal(8)
+    # pack two columns contiguously into one buffer
+    a = array("d", list(ci) + list(cj))
+    theta = 0.7
+    c, s = math.cos(theta), math.sin(theta)
+    k.rot(a, 0, 8, c, s, 8)
+    check("rot col_i", a[0:8], c * ci - s * cj)
+    check("rot col_j", a[8:16], s * ci + c * cj)
+
+
 def main():
-    for fn in (test_dot, test_norm2, test_scale, test_axpy):
+    for fn in (test_dot, test_norm2, test_scale, test_axpy, test_rot):
         try:
             fn()
         except Exception as ex:                    # noqa: BLE001
