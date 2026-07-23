@@ -582,9 +582,7 @@ class AlmeidaTensor:
     def sum(self, axis: Optional[int] = None, keepdims: bool = False) -> 'AlmeidaTensor':
         """Sum along axis or globally."""
         if axis is None:
-            acc = 0.0
-            for i in range(self.size):
-                acc += self._buffer[i]
+            acc = sum(self._buffer._data)
             if keepdims:
                 return AlmeidaTensor([acc], dtype=self._dtype).reshape((1,) * self.ndim)
             return AlmeidaTensor([acc], dtype=self._dtype)
@@ -644,19 +642,32 @@ class AlmeidaTensor:
 
         result = AlmeidaTensor(shape=tuple(new_shape) if new_shape else (1,), dtype=self._dtype)
 
-        # Initialize with init value
-        for i in range(result.size):
-            result._buffer[i] = init
+        # Any flat index decomposes as o*(axis_len*inner) + a*inner + b, and the
+        # reduced output index is simply o*inner + b. Computing that arithmetically
+        # avoids a _flat_to_multi/_multi_to_flat round-trip per element.
+        shape = self._shape
+        axis_len = shape[axis]
+        inner = 1
+        for d in shape[axis + 1:]:
+            inner *= d
+        outer = 1
+        for d in shape[:axis]:
+            outer *= d
 
-        # Reduce
-        for flat_idx in range(self.size):
-            indices = list(self._flat_to_multi(flat_idx))
-            if keepdims:
-                indices[axis] = 0
-            else:
-                indices = indices[:axis] + indices[axis+1:]
-            result_flat = result._multi_to_flat(tuple(indices)) if indices else 0
-            result._buffer[result_flat] = op(result._buffer[result_flat], self._buffer[flat_idx])
+        sd = self._buffer._data
+        rd = result._buffer._data
+        for i in range(len(rd)):
+            rd[i] = init
+
+        span = axis_len * inner
+        for o in range(outer):
+            in_o = o * span
+            out_o = o * inner
+            for a in range(axis_len):
+                in_oa = in_o + a * inner
+                for b in range(inner):
+                    oidx = out_o + b
+                    rd[oidx] = op(rd[oidx], sd[in_oa + b])
 
         return result
 
@@ -1239,38 +1250,47 @@ def qr(A: AlmeidaTensor) -> Tuple[AlmeidaTensor, AlmeidaTensor]:
 
     m, n = A.shape
 
+    # Modified Gram-Schmidt is column-oriented; extract columns as plain lists
+    # once (from the row-major flat buffer) so the O(m*n^2) inner loops run on
+    # Python lists instead of paying per-element __getitem__/_multi_to_flat.
+    ad = A._buffer._data
+    cols = [[ad[i * n + j] for i in range(m)] for j in range(n)]
+    Rd = [[0.0] * n for _ in range(n)]
+
+    for j in range(n):
+        qj = cols[j]
+        norm_sq = 0.0
+        for v in qj:
+            norm_sq += v * v
+        rjj = math.sqrt(norm_sq)
+        Rd[j][j] = rjj
+
+        if rjj > 1e-10:
+            inv = 1.0 / rjj
+            qj = [v * inv for v in qj]
+            cols[j] = qj
+
+        for k in range(j + 1, n):
+            qk = cols[k]
+            dot = 0.0
+            for a, b in zip(qj, qk):
+                dot += a * b
+            Rd[j][k] = dot
+            cols[k] = [b - dot * a for a, b in zip(qj, qk)]
+
+    # Write columns back into Q (m, n) and R (n, n) via flat buffers.
     Q = zeros((m, n))
     R = zeros((n, n))
-
-    # Copy A columns into Q
+    qd, rd = Q._buffer._data, R._buffer._data
     for j in range(n):
+        colj = cols[j]
         for i in range(m):
-            Q[i, j] = A[i, j]
-
-    # Modified Gram-Schmidt
-    for j in range(n):
-        # Compute norm of column j
-        norm_sq = 0.0
-        for i in range(m):
-            norm_sq += Q[i, j] ** 2
-        R[j, j] = math.sqrt(norm_sq)
-
-        if R[j, j] > 1e-10:
-            # Normalize column j
-            for i in range(m):
-                Q[i, j] = Q[i, j] / R[j, j]
-
-        # Orthogonalize remaining columns
-        for k in range(j + 1, n):
-            # R[j,k] = Q[:,j] . Q[:,k]
-            dot = 0.0
-            for i in range(m):
-                dot += Q[i, j] * Q[i, k]
-            R[j, k] = dot
-
-            # Q[:,k] -= R[j,k] * Q[:,j]
-            for i in range(m):
-                Q[i, k] = Q[i, k] - R[j, k] * Q[i, j]
+            qd[i * n + j] = colj[i]
+    for r in range(n):
+        Rr = Rd[r]
+        base = r * n
+        for c in range(n):
+            rd[base + c] = Rr[c]
 
     return Q, R
 
@@ -1309,81 +1329,70 @@ def svd_power_iteration(
     S = zeros((k,))
     Vt = zeros((k, n))
 
-    # Work with a copy for deflation
+    # Work with a flat copy for deflation; keep u/v as plain Python lists so the
+    # per-iteration matvecs and the deflation rank-1 update avoid per-element
+    # __getitem__/__setitem__ over the whole matrix.
     A_work = A.copy()
+    awd = A_work._buffer._data
 
     for i in range(k):
-        # Power iteration for largest singular value
-        # Start with random vector
-        v = randn((n,))
-
-        # Normalize
-        norm = 0.0
-        for j in range(n):
-            norm += v._buffer[j] ** 2
-        norm = math.sqrt(norm)
-        for j in range(n):
-            v._buffer[j] = v._buffer[j] / norm
+        # Start from a random unit vector.
+        v = list(randn((n,))._buffer._data)
+        norm = math.sqrt(sum(x * x for x in v))
+        inv = 1.0 / norm
+        v = [x * inv for x in v]
 
         sigma_old = 0.0
+        u = [0.0] * m
 
         for _ in range(max_iter):
-            # u = A @ v
-            u = zeros((m,))
+            # u = A @ v  (row-major, contiguous over awd)
             for row in range(m):
+                base = row * n
                 acc = 0.0
                 for col in range(n):
-                    acc += A_work[row, col] * v._buffer[col]
-                u._buffer[row] = acc
+                    acc += awd[base + col] * v[col]
+                u[row] = acc
 
-            # Normalize u, get sigma
-            sigma = 0.0
-            for j in range(m):
-                sigma += u._buffer[j] ** 2
-            sigma = math.sqrt(sigma)
-
+            sigma = math.sqrt(sum(x * x for x in u))
             if sigma < 1e-10:
                 break
+            inv = 1.0 / sigma
+            u = [x * inv for x in u]
 
-            for j in range(m):
-                u._buffer[j] = u._buffer[j] / sigma
+            # v_new = A.T @ u  (accumulate into columns, row-major over awd)
+            v_new = [0.0] * n
+            for row in range(m):
+                base = row * n
+                ur = u[row]
+                for col in range(n):
+                    v_new[col] += awd[base + col] * ur
 
-            # v = A.T @ u
-            v_new = zeros((n,))
-            for col in range(n):
-                acc = 0.0
-                for row in range(m):
-                    acc += A_work[row, col] * u._buffer[row]
-                v_new._buffer[col] = acc
-
-            # Normalize v
-            norm = 0.0
-            for j in range(n):
-                norm += v_new._buffer[j] ** 2
-            norm = math.sqrt(norm)
-
+            norm = math.sqrt(sum(x * x for x in v_new))
             if norm < 1e-10:
                 break
+            inv = 1.0 / norm
+            v = [x * inv for x in v_new]
 
-            for j in range(n):
-                v._buffer[j] = v_new._buffer[j] / norm
-
-            # Check convergence
             if abs(sigma - sigma_old) < tol * sigma:
                 break
             sigma_old = sigma
 
-        # Store results
+        # Store results: U[:,i] = u, Vt[i,:] = v
         S._buffer[i] = sigma
+        ud, vtd = U._buffer._data, Vt._buffer._data
         for j in range(m):
-            U[j, i] = u._buffer[j]
+            ud[j * k + i] = u[j]
+        vbase = i * n
         for j in range(n):
-            Vt[i, j] = v._buffer[j]
+            vtd[vbase + j] = v[j]
 
-        # Deflate: A = A - sigma * u @ v.T
+        # Deflate: A_work -= sigma * u (x) v^T
         for row in range(m):
+            base = row * n
+            su = sigma * u[row]
             for col in range(n):
-                A_work[row, col] = A_work[row, col] - sigma * u._buffer[row] * v._buffer[col]
+                awd[base + col] -= su * v[col]
 
     return U, S, Vt
 
