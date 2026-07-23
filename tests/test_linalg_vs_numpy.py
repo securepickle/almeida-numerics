@@ -148,6 +148,11 @@ def test_iterative():
     A, An = spd(6)                                 # symmetric positive-definite
     b, bn = randv(6)
     check("cg solves SPD Ax=b", la.cg(A, b), np.linalg.solve(An, bn), rtol=1e-4, atol=1e-5)
+    # GMRES on a general (non-symmetric) well-conditioned system
+    g = RNG.standard_normal((6, 6)) + 6 * np.eye(6)
+    bg = RNG.standard_normal(6)
+    check("gmres solves general Ax=b", la.gmres(g.tolist(), bg.tolist()),
+          np.linalg.solve(g, bg), rtol=1e-4, atol=1e-5)
 
 
 def main():

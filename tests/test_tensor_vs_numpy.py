@@ -205,6 +205,11 @@ def test_extras():
     e = np.exp(s - s.max(axis=-1, keepdims=True)); w = e / e.sum(axis=-1, keepdims=True)
     check("attention softmax(QK^T/sqrt d)V", at.scaled_dot_product_attention(q, kk, vv), w @ vn,
           rtol=2e-3, atol=2e-3)
+    # conv2d (valid cross-correlation) via im2col + inner product
+    ix, ixn = rand(9, 11); kern, kernn = rand(3, 4)
+    oh, ow = 9 - 3 + 1, 11 - 4 + 1
+    ref = np.array([[(ixn[i:i + 3, j:j + 4] * kernn).sum() for j in range(ow)] for i in range(oh)])
+    check("conv2d valid", at.conv2d(ix, kern), ref, rtol=1e-4, atol=1e-4)
     # layer_norm: 1D and 2D, with and without bias
     x1, x1n = rand(8); w, wn = rand(8); bias, biasn = rand(8)
     check("layer_norm 1D no-bias", at.layer_norm(x1, w), _np_layernorm(x1n, wn))

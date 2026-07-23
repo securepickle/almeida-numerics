@@ -1298,6 +1298,39 @@ def scaled_dot_product_attention(q: AlmeidaTensor, k: AlmeidaTensor, v: AlmeidaT
     return weights @ v                           # (n_q, d_v)
 
 
+def conv2d(x: AlmeidaTensor, weight: AlmeidaTensor, stride: int = 1) -> AlmeidaTensor:
+    """
+    2D cross-correlation (valid), single channel, via im2col + inner product.
+
+    x (H, W), weight (kh, kw), stride s -> (out_h, out_w). Each output gathers a
+    kh*kw patch (im2col) and contracts it with the flattened kernel. Unlike the
+    linear-algebra ops, the new ingredient here is DATA MOVEMENT (the patch
+    gather), not a new arithmetic kernel — the contraction reuses sum(map(mul)).
+    """
+    H, W = x.shape
+    kh, kw = weight.shape
+    out_h = (H - kh) // stride + 1
+    out_w = (W - kw) // stride + 1
+    xd = x._buffer._data
+    wflat = weight._buffer._data
+    mul = operator.mul
+
+    result = AlmeidaTensor(shape=(out_h, out_w), dtype=x.dtype)
+    rd = result._buffer._data
+    out = [0.0] * (out_h * out_w)
+    for oi in range(out_h):
+        i0 = oi * stride
+        for oj in range(out_w):
+            j0 = oj * stride
+            patch = []
+            for di in range(kh):                 # im2col: gather one patch
+                base = (i0 + di) * W + j0
+                patch += xd[base:base + kw]
+            out[oi * out_w + oj] = sum(map(mul, patch, wflat))
+    rd[:] = array.array(rd.typecode, out)
+    return result
+
+
 # =============================================================================
 # LINEAR ALGEBRA: SVD, QR, and utilities
 # =============================================================================

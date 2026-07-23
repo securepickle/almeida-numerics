@@ -744,6 +744,80 @@ def cg(A: Matrix, b: Vector, x0: Optional[Vector] = None,
     return x
 
 
+def gmres(A: Matrix, b: Vector, x0: Optional[Vector] = None,
+          tol: float = 1e-10, max_iter: Optional[int] = None) -> Vector:
+    """
+    Solve A @ x = b for general (non-symmetric) A by GMRES (no restart).
+
+    Arnoldi builds an orthonormal Krylov basis via modified Gram-Schmidt
+    (matvec + dot + scaled vector add) and the small Hessenberg least-squares
+    problem is reduced with Givens rotations. So GMRES bottoms out at the same
+    BLAS-1/2 primitives as CG, plus scalar Givens rotations on the Hessenberg.
+
+    Args:
+        A: Square matrix (n x n)
+        b: Right-hand side (n)
+        x0: Optional initial guess (defaults to zeros)
+        tol: Residual tolerance
+        max_iter: Krylov dimension cap (defaults to n)
+
+    Returns:
+        Solution vector x (n)
+    """
+    n = len(b)
+    if max_iter is None:
+        max_iter = n
+    x = [0.0] * n if x0 is None else list(x0)
+
+    r = sub_vectors(b, matvec(A, x))
+    beta = vector_norm(r)
+    if beta < tol:
+        return x
+
+    Q = [scale_vector(1.0 / beta, r)]            # Krylov basis
+    H = [[0.0] * max_iter for _ in range(max_iter + 1)]
+    cs = [0.0] * max_iter
+    sn = [0.0] * max_iter
+    g = [0.0] * (max_iter + 1)
+    g[0] = beta
+
+    steps = max_iter
+    for j in range(max_iter):
+        w = matvec(A, Q[j])
+        for i in range(j + 1):                   # modified Gram-Schmidt
+            H[i][j] = dot(Q[i], w)
+            w = sub_vectors(w, scale_vector(H[i][j], Q[i]))
+        H[j + 1][j] = vector_norm(w)
+        if H[j + 1][j] > 1e-14:
+            Q.append(scale_vector(1.0 / H[j + 1][j], w))
+
+        for i in range(j):                       # apply prior Givens to column j
+            t = cs[i] * H[i][j] + sn[i] * H[i + 1][j]
+            H[i + 1][j] = -sn[i] * H[i][j] + cs[i] * H[i + 1][j]
+            H[i][j] = t
+        denom = math.sqrt(H[j][j] ** 2 + H[j + 1][j] ** 2)  # new Givens
+        cs[j] = H[j][j] / denom
+        sn[j] = H[j + 1][j] / denom
+        H[j][j] = cs[j] * H[j][j] + sn[j] * H[j + 1][j]
+        H[j + 1][j] = 0.0
+        g[j + 1] = -sn[j] * g[j]
+        g[j] = cs[j] * g[j]
+        if abs(g[j + 1]) < tol:
+            steps = j + 1
+            break
+
+    y = [0.0] * steps                            # back-substitute
+    for i in range(steps - 1, -1, -1):
+        s = g[i]
+        for c in range(i + 1, steps):
+            s -= H[i][c] * y[c]
+        y[i] = s / H[i][i]
+    for i in range(steps):
+        x = add_vectors(x, scale_vector(y[i], Q[i]))
+
+    return x
+
+
 # =============================================================================
 # MATRIX INVERSE AND DETERMINANT
 # =============================================================================

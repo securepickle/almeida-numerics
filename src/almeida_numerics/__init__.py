@@ -52,6 +52,7 @@ from .tensor import (
     layer_norm,
     rope_embed,
     scaled_dot_product_attention,
+    conv2d,
     qr,
     svd,
     diag,
@@ -66,7 +67,7 @@ __all__ = [
     "zeros", "ones", "eye", "randn", "arange", "from_list",
     "from_numpy", "to_numpy", "from_torch", "to_torch",
     "softmax", "silu", "gelu", "rms_norm", "layer_norm", "rope_embed",
-    "scaled_dot_product_attention",
+    "scaled_dot_product_attention", "conv2d",
     "qr", "svd", "diag", "tensordot",
     "__version__",
 ]
