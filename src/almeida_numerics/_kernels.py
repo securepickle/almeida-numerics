@@ -110,3 +110,41 @@ def rot(a, si, sj, c, s, n):
     cj = a[sj:sj + n]
     _store(a, si, n, [c * x - s * y for x, y in zip(ci, cj)])
     _store(a, sj, n, [s * x + c * y for x, y in zip(ci, cj)])
+
+
+# --- BLAS-2: fused matrix-vector kernels (a is row-major m x n) -----------------
+# These read the vector operand ONCE and loop the rows internally, avoiding the
+# repeated operand-slicing a per-row dot()/axpy() would pay across many rows.
+
+def gemv(a, m, n, x, out):
+    """out[i] = sum_j a[i*n + j] * x[j]   (out = A @ x). Overwrites out[0:m]."""
+    xs = x if isinstance(x, list) else x[:]        # snapshot the shared operand once
+    for i in range(m):
+        base = i * n
+        acc = 0.0
+        for av, xv in zip(a[base:base + n], xs):
+            acc += av * xv
+        out[i] = acc
+
+
+def gemv_t(a, m, n, x, out):
+    """out[j] = sum_i a[i*n + j] * x[i]   (out = A^T @ x). Overwrites out[0:n]."""
+    for j in range(n):
+        out[j] = 0.0
+    for i in range(m):
+        xi = x[i]
+        if xi == 0.0:
+            continue
+        base = i * n
+        _store(out, 0, n, [o + xi * av for o, av in zip(out, a[base:base + n])])
+
+
+def ger_sub(a, m, n, alpha, u, v):
+    """Rank-1 update in place: A -= alpha * u (x) v^T   (A row-major m x n)."""
+    vs = v if isinstance(v, list) else v[:]
+    for i in range(m):
+        au = alpha * u[i]
+        if au == 0.0:
+            continue
+        base = i * n
+        _store(a, base, n, [rv - au * vv for rv, vv in zip(a[base:base + n], vs)])

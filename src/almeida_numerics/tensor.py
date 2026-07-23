@@ -1366,21 +1366,14 @@ def svd_power_iteration(
         u = [0.0] * m
 
         for _ in range(max_iter):
-            # u = A @ v : each row of A is a contiguous vector in awd.
-            for row in range(m):
-                u[row] = _k.dot(awd, row * n, 1, v, 0, 1, n)
-
+            _k.gemv(awd, m, n, v, u)              # u = A @ v
             sigma = _k.norm2(u, 0, 1, m)
             if sigma < 1e-10:
                 break
             _k.scale(u, 0, 1, m, 1.0 / sigma)
 
-            # v_new = A.T @ u : accumulate u[row] * (row of A) into v_new, so the
-            # awd reads stay row-major/contiguous (no strided column walk).
             v_new = [0.0] * n
-            for row in range(m):
-                _k.axpy(v_new, 0, 1, awd, row * n, 1, u[row], n)
-
+            _k.gemv_t(awd, m, n, u, v_new)        # v_new = A^T @ u
             norm = _k.norm2(v_new, 0, 1, n)
             if norm < 1e-10:
                 break
@@ -1400,9 +1393,8 @@ def svd_power_iteration(
         for j in range(n):
             vtd[vbase + j] = v[j]
 
-        # Deflate: A_work -= sigma * u (x) v^T, one row (axpy) at a time.
-        for row in range(m):
-            _k.axpy(awd, row * n, 1, v, 0, 1, -sigma * u[row], n)
+        # Deflate: A_work -= sigma * u (x) v^T  (rank-1 update).
+        _k.ger_sub(awd, m, n, sigma, u, v)
 
     return U, S, Vt
 

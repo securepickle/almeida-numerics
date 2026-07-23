@@ -86,8 +86,27 @@ def test_rot():
     check("rot col_j", a[8:16], s * ci + c * cj)
 
 
+def test_blas2():
+    m, n = 6, 4
+    An = RNG.standard_normal((m, n))
+    a = array("d", An.ravel())                    # row-major
+    xn = RNG.standard_normal(n)
+    out = [0.0] * m
+    k.gemv(a, m, n, list(xn), out)
+    check("gemv out=A@x", out, An @ xn)
+    yn = RNG.standard_normal(m)
+    outt = [0.0] * n
+    k.gemv_t(a, m, n, list(yn), outt)
+    check("gemv_t out=A^T@x", outt, An.T @ yn)
+    # rank-1 update: A -= alpha * u (x) v^T
+    un = RNG.standard_normal(m); vn = RNG.standard_normal(n); alpha = 1.3
+    a2 = array("d", An.ravel())
+    k.ger_sub(a2, m, n, alpha, list(un), list(vn))
+    check("ger_sub A-=a*u(x)v", list(a2), (An - alpha * np.outer(un, vn)).ravel())
+
+
 def main():
-    for fn in (test_dot, test_norm2, test_scale, test_axpy, test_rot):
+    for fn in (test_dot, test_norm2, test_scale, test_axpy, test_rot, test_blas2):
         try:
             fn()
         except Exception as ex:                    # noqa: BLE001
