@@ -133,9 +133,78 @@ def test_linalg():
         _results.append(("svd", False, float("inf"), f"EXC {type(ex).__name__}: {ex}"))
 
 
+# ---------------------------------------------------------------- extras (utility / NN)
+def _np_layernorm(xn, wn, bn=None, eps=1e-5):
+    mu = xn.mean(axis=-1, keepdims=True)
+    var = xn.var(axis=-1, keepdims=True)          # population variance
+    out = (xn - mu) / np.sqrt(var + eps) * wn
+    return out if bn is None else out + bn
+
+
+def _np_rope(xn, cosn, sinn, position=0):
+    seq, nh, hd = xn.shape
+    half = hd // 2
+    out = xn.copy()
+    for s in range(seq):
+        pos = position + s
+        for h in range(nh):
+            for d in range(half):
+                x1, x2 = xn[s, h, d], xn[s, h, d + half]
+                c, si = cosn[pos, d], sinn[pos, d]
+                out[s, h, d] = x1 * c - x2 * si
+                out[s, h, d + half] = x1 * si + x2 * c
+    return out
+
+
+def test_extras():
+    # diag: vector -> matrix, matrix -> diagonal vector
+    v, vn = rand(5)
+    check("diag vec->mat", at.diag(v), np.diag(vn))
+    m, mn = rand(4, 6)
+    check("diag mat->vec", at.diag(m), np.diag(mn))
+    # tensordot: last axis of a with first axis of b (2D and 3D)
+    a, an = rand(3, 4); b, bn = rand(4, 5)
+    check("tensordot 2D", at.tensordot(a, b, ([-1], [0])), np.tensordot(an, bn, axes=([1], [0])))
+    a3, a3n = rand(2, 3, 4)
+    check("tensordot 3D", at.tensordot(a3, b, ([-1], [0])), np.tensordot(a3n, bn, axes=([2], [0])))
+    # argmin / argmax (flattened index), cumsum (flattened), diff (1D)
+    x, xn = rand(4, 5)
+    check("argmin", at.argmin(x), int(np.argmin(xn)))
+    check("argmax", at.argmax(x), int(np.argmax(xn)))
+    check("cumsum", at.cumsum(x), np.cumsum(xn))
+    d, dn = rand(9)
+    check("diff", at.diff(d), np.diff(dn))
+    # polyfit deg=1 -> [slope, intercept]
+    xsn = np.linspace(-2, 2, 20).astype(np.float32)
+    ysn = (1.7 * xsn - 0.5 + RNG.standard_normal(20).astype(np.float32) * 0.05)
+    check("polyfit deg1 [slope,intercept]",
+          at.polyfit(at.from_numpy(xsn), at.from_numpy(ysn), 1), np.polyfit(xsn, ysn, 1))
+    # searchsorted (left)
+    base = np.array([1., 3., 5., 7., 9.], dtype=np.float32)
+    srt = at.from_numpy(base)
+    for val in (0.5, 4.0, 5.0, 10.0):
+        check(f"searchsorted({val})", at.searchsorted(srt, val), int(np.searchsorted(base, val)))
+    # squeeze
+    sq, sqn = rand(1, 4, 1)
+    check("squeeze all", at.squeeze(sq), np.squeeze(sqn))
+    check("squeeze axis0", at.squeeze(sq, axis=0), np.squeeze(sqn, axis=0))
+    # layer_norm: 1D and 2D, with and without bias
+    x1, x1n = rand(8); w, wn = rand(8); bias, biasn = rand(8)
+    check("layer_norm 1D no-bias", at.layer_norm(x1, w), _np_layernorm(x1n, wn))
+    check("layer_norm 1D +bias", at.layer_norm(x1, w, bias), _np_layernorm(x1n, wn, biasn))
+    x2, x2n = rand(4, 8)
+    check("layer_norm 2D +bias", at.layer_norm(x2, w, bias), _np_layernorm(x2n, wn, biasn))
+    # rope_embed: (seq, n_heads, head_dim)
+    xr, xrn = rand(3, 2, 8)
+    cosn = RNG.standard_normal((3, 8)).astype(np.float32)
+    sinn = RNG.standard_normal((3, 8)).astype(np.float32)
+    check("rope_embed", at.rope_embed(xr, at.from_numpy(cosn), at.from_numpy(sinn)),
+          _np_rope(xrn, cosn, sinn))
+
+
 def main():
     for fn in (test_construction, test_elementwise, test_matmul_shape,
-               test_reductions, test_nn_ops, test_linalg):
+               test_reductions, test_nn_ops, test_linalg, test_extras):
         try:
             fn()
         except Exception as ex:                    # noqa: BLE001

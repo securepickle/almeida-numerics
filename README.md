@@ -21,10 +21,10 @@ non-zero on any mismatch.
 
 | suite | reference | checks | result |
 |-------|-----------|-------:|:------:|
-| `tests/test_tensor_vs_numpy.py` | NumPy | 40 | ✅ all pass |
+| `tests/test_tensor_vs_numpy.py` | NumPy | 59 | ✅ all pass |
 | `tests/test_linalg_vs_numpy.py` | NumPy | 38 | ✅ all pass |
 | `tests/test_stats_vs_scipy.py`  | NumPy + SciPy | 63 | ✅ all pass |
-| **total** | | **141** | **all pass** |
+| **total** | | **160** | **all pass** |
 
 Closed-form operations match to machine precision (max error ~1e-16). The hand-written
 decompositions are validated by reconstruction and by their defining invariants:
@@ -87,8 +87,8 @@ an.from_torch(torch_tensor); an.to_torch(t)
 
 - **`almeida_numerics.tensor`** — `AlmeidaTensor` over Python `array`/`struct` with custom dtypes
   (fp32/fp16/bf16/…): broadcast elementwise math, matmul, transpose/reshape, reductions,
-  `softmax`/`silu`/`gelu`/`rms_norm`/`layer_norm`/`rope_embed`, `qr`/`svd`/`diag`/`tensordot`, and a
-  standard Tensor-Train decomposition.
+  `softmax`/`silu`/`gelu`/`rms_norm`/`layer_norm`/`rope_embed`, `qr`/`svd`/`diag`/`tensordot`, and
+  utilities (`argmin`/`argmax`/`cumsum`/`diff`/`polyfit`/`searchsorted`/`squeeze`).
 - **`almeida_numerics.linalg`** — list-based linear algebra: `matmul`/`matvec`/`dot`/`outer`, norms,
   `qr` (Gram-Schmidt & Householder), `lu`, `cholesky`, `eig` (power / QR), `svd` (power / full),
   `solve`, `lstsq`, `det`, `inv`, `pinv`, `rank`, `cond`, `matrix_power`, `trace`.
