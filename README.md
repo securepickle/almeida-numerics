@@ -21,11 +21,11 @@ non-zero on any mismatch.
 
 | suite | reference | checks | result |
 |-------|-----------|-------:|:------:|
-| `tests/test_kernels_vs_numpy.py` | NumPy | 13 | ✅ all pass |
-| `tests/test_tensor_vs_numpy.py` | NumPy | 62 | ✅ all pass |
+| `tests/test_kernels_vs_numpy.py` | NumPy | 16 | ✅ all pass |
+| `tests/test_tensor_vs_numpy.py` | NumPy | 64 | ✅ all pass |
 | `tests/test_linalg_vs_numpy.py` | NumPy | 38 | ✅ all pass |
 | `tests/test_stats_vs_scipy.py`  | NumPy + SciPy | 63 | ✅ all pass |
-| **total** | | **176** | **all pass** |
+| **total** | | **181** | **all pass** |
 
 Closed-form operations match to machine precision (max error ~1e-16). The hand-written
 decompositions are validated by reconstruction and by their defining invariants:
@@ -38,6 +38,36 @@ decompositions are validated by reconstruction and by their defining invariants:
 
 Iterative routines (power-method eig/SVD) use looser, explicitly-labelled tolerances than the
 closed-form ops — the suites say which is which.
+
+## Performance
+
+Pure Python can't touch NumPy's vectorized C for raw throughput — and this library doesn't try to.
+What it *does* do is stay out of the interpreter's way: hot paths hand their inner loops to C
+builtins (`sum`, `map`, list comprehensions, slice-assignment) and operate on raw `array` storage
+via a small internal kernel layer, rather than paying per-element method dispatch. The result is a
+reference implementation that's honest about the ceiling but not needlessly slow.
+
+Representative timings — Python 3.12, float32, best-of-5, both libraries timed in the **same
+process** (`python bench/benchmark.py`). NumPy is shown only for scale; these are microbenchmarks
+and NumPy times at this size are noisy.
+
+| operation | almeida (ms) | numpy (ms) | notes |
+|-----------|-------------:|-----------:|-------|
+| matmul 128×128 | 36.6 | 0.011 | inner product via `sum(map(mul, …))` |
+| qr 64×64 | 6.9 | 0.058 | Modified Gram–Schmidt, column-major workspace |
+| svd 32×32 | 27.0 | 0.079 | one-sided Jacobi (deterministic) |
+| softmax 64×256 | 1.32 | 0.018 | contiguous row slices |
+| layer_norm 64×256 | 1.56 | 0.026 | raw-buffer row slices |
+| add 128×128 | 0.73 | 0.001 | bulk zip-comprehension |
+| sum(axis=0) 128×128 | 0.85 | 0.003 | outer/reduce/inner strides |
+| sum(all) 128×128 | 0.08 | 0.002 | C-level `sum()` over the buffer |
+
+The gap is smallest where the work naturally maps to a C builtin (`sum(all)`) and largest for
+matmul, where NumPy additionally uses SIMD and a cache-blocked, multithreaded BLAS that pure Python
+has no access to. **If you need throughput, cross to NumPy at the boundary** with `to_numpy` /
+`from_numpy` — that's the intended escape hatch, not a hidden backend.
+
+Every optimization is gated by the 181-check suite: the numbers above changed, the outputs did not.
 
 ## Install
 
@@ -102,12 +132,13 @@ an.from_torch(torch_tensor); an.to_torch(t)
 
 ```bash
 pip install -e ".[test]"
+python tests/test_kernels_vs_numpy.py
 python tests/test_tensor_vs_numpy.py
 python tests/test_linalg_vs_numpy.py
 python tests/test_stats_vs_scipy.py
 ```
 
-Each prints a per-operation report and exits `0` only if every check passes. CI runs all three on
+Each prints a per-operation report and exits `0` only if every check passes. CI runs all four on
 Python 3.8 / 3.10 / 3.12.
 
 ## License
