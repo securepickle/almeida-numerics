@@ -547,11 +547,33 @@ class AlmeidaTensor:
                     rd[j * m + i] = sd[base + j]
             return result
 
-        for flat_idx in range(self.size):
-            old_indices = self._flat_to_multi(flat_idx)
-            new_indices = tuple(old_indices[i] for i in axes)
-            new_flat = result._multi_to_flat(new_indices)
-            result._buffer[new_flat] = self._buffer[flat_idx]
+        # General N-D: walk the input in flat order with an odometer of its
+        # multi-index, updating the output flat index incrementally. Each input
+        # axis d contributes coeff[d] = the output stride of the axis it maps to,
+        # so no per-element _flat_to_multi/_multi_to_flat is needed.
+        nd = self.ndim
+        in_shape = self._shape
+        out_strides = [0] * nd
+        acc = 1
+        for p in range(nd - 1, -1, -1):
+            out_strides[p] = acc
+            acc *= new_shape[p]
+        coeff = [0] * nd
+        for p in range(nd):
+            coeff[axes[p]] = out_strides[p]
+
+        sd, rd = self._buffer._data, result._buffer._data
+        idx = [0] * nd
+        out_flat = 0
+        for f in range(self.size):
+            rd[out_flat] = sd[f]
+            for d in range(nd - 1, -1, -1):          # odometer increment (last axis fastest)
+                idx[d] += 1
+                out_flat += coeff[d]
+                if idx[d] < in_shape[d]:
+                    break
+                idx[d] = 0
+                out_flat -= coeff[d] * in_shape[d]
 
         return result
 
@@ -1549,16 +1571,21 @@ def tensordot(a: AlmeidaTensor, b: AlmeidaTensor, axes) -> AlmeidaTensor:
         for d in b_shape[1:]:
             b_outer_size *= d
 
-        # Contract
+        # This is a reshaped matmul (a_outer x K) @ (K x b_outer); use the same
+        # C-builtin inner product as __matmul__.
+        a_data, b_data, rd = a._buffer._data, b._buffer._data, result._buffer._data
+        mul = operator.mul
+        K = contract_dim
+        a_rows = [a_data[i * K:(i + 1) * K] for i in range(a_outer_size)]
+        last = (K - 1) * b_outer_size + 1
+        b_cols = [b_data[j:j + last:b_outer_size] for j in range(b_outer_size)]
+        out = [0.0] * (a_outer_size * b_outer_size)
         for i in range(a_outer_size):
+            ar = a_rows[i]
+            ob = i * b_outer_size
             for j in range(b_outer_size):
-                acc = 0.0
-                for k in range(contract_dim):
-                    a_idx = i * contract_dim + k
-                    b_idx = k * b_outer_size + j
-                    acc += a._buffer[a_idx] * b._buffer[b_idx]
-                result._buffer[i * b_outer_size + j] = acc
-
+                out[ob + j] = sum(map(mul, ar, b_cols[j]))
+        rd[:] = array.array(rd.typecode, out)
         return result
     else:
         raise NotImplementedError(f"tensordot only supports axes=([-1], [0]), got {axes}")

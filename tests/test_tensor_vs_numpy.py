@@ -195,6 +195,10 @@ def test_extras():
     sq, sqn = rand(1, 4, 1)
     check("squeeze all", at.squeeze(sq), np.squeeze(sqn))
     check("squeeze axis0", at.squeeze(sq, axis=0), np.squeeze(sqn, axis=0))
+    # general N-D transpose (odometer path)
+    t3, t3n = rand(2, 3, 4)
+    check("transpose (2,0,1)", t3.transpose((2, 0, 1)), np.transpose(t3n, (2, 0, 1)))
+    check("transpose (1,2,0)", t3.transpose((1, 2, 0)), np.transpose(t3n, (1, 2, 0)))
     # layer_norm: 1D and 2D, with and without bias
     x1, x1n = rand(8); w, wn = rand(8); bias, biasn = rand(8)
     check("layer_norm 1D no-bias", at.layer_norm(x1, w), _np_layernorm(x1n, wn))
