@@ -387,10 +387,11 @@ class AlmeidaTensor:
     def _apply_binary_op(self, other: 'AlmeidaTensor', op) -> 'AlmeidaTensor':
         """Apply binary operation with broadcasting."""
         if self._shape == other._shape:
-            # Fast path: same shape
+            # Fast path: same shape — bulk-build on the raw buffers.
             result = AlmeidaTensor(shape=self._shape, dtype=self._dtype)
-            for i in range(self.size):
-                result._buffer[i] = op(self._buffer[i], other._buffer[i])
+            rd = result._buffer._data
+            rd[:] = array.array(rd.typecode,
+                                [op(a, b) for a, b in zip(self._buffer._data, other._buffer._data)])
             return result
 
         # Broadcast path
@@ -422,11 +423,13 @@ class AlmeidaTensor:
     def __add__(self, other: Union['AlmeidaTensor', float]) -> 'AlmeidaTensor':
         """Element-wise addition with broadcasting."""
         if isinstance(other, (int, float)):
+            return self._map(lambda v: v + other)
+        if self._shape == other._shape:
             result = AlmeidaTensor(shape=self._shape, dtype=self._dtype)
-            for i in range(self.size):
-                result._buffer[i] = self._buffer[i] + other
+            rd = result._buffer._data
+            rd[:] = array.array(rd.typecode,
+                                [a + b for a, b in zip(self._buffer._data, other._buffer._data)])
             return result
-
         return self._apply_binary_op(other, lambda a, b: a + b)
 
     def __radd__(self, other: float) -> 'AlmeidaTensor':
@@ -444,11 +447,13 @@ class AlmeidaTensor:
     def __mul__(self, other: Union['AlmeidaTensor', float]) -> 'AlmeidaTensor':
         """Element-wise multiplication with broadcasting."""
         if isinstance(other, (int, float)):
+            return self._map(lambda v: v * other)
+        if self._shape == other._shape:
             result = AlmeidaTensor(shape=self._shape, dtype=self._dtype)
-            for i in range(self.size):
-                result._buffer[i] = self._buffer[i] * other
+            rd = result._buffer._data
+            rd[:] = array.array(rd.typecode,
+                                [a * b for a, b in zip(self._buffer._data, other._buffer._data)])
             return result
-
         return self._apply_binary_op(other, lambda a, b: a * b)
 
     def __rmul__(self, other: float) -> 'AlmeidaTensor':
@@ -463,17 +468,11 @@ class AlmeidaTensor:
 
     def __neg__(self) -> 'AlmeidaTensor':
         """Element-wise negation."""
-        result = AlmeidaTensor(shape=self._shape, dtype=self._dtype)
-        for i in range(self.size):
-            result._buffer[i] = -self._buffer[i]
-        return result
+        return self._map(lambda v: -v)
 
     def __pow__(self, exponent: float) -> 'AlmeidaTensor':
         """Element-wise power."""
-        result = AlmeidaTensor(shape=self._shape, dtype=self._dtype)
-        for i in range(self.size):
-            result._buffer[i] = self._buffer[i] ** exponent
-        return result
+        return self._map(lambda v: v ** exponent)
 
     # -------------------------------------------------------------------------
     # Matrix Operations
@@ -733,57 +732,41 @@ class AlmeidaTensor:
     # Element-wise Math Functions
     # -------------------------------------------------------------------------
 
+    def _map(self, fn) -> 'AlmeidaTensor':
+        """Bulk element-wise unary map on the raw buffer (no per-element __getitem__)."""
+        result = AlmeidaTensor(shape=self._shape, dtype=self._dtype)
+        rd = result._buffer._data
+        rd[:] = array.array(rd.typecode, [fn(v) for v in self._buffer._data])
+        return result
+
     def abs(self) -> 'AlmeidaTensor':
         """Element-wise absolute value."""
-        result = AlmeidaTensor(shape=self._shape, dtype=self._dtype)
-        for i in range(self.size):
-            result._buffer[i] = abs(self._buffer[i])
-        return result
+        return self._map(abs)
 
     def sqrt(self, x: Optional['AlmeidaTensor'] = None) -> 'AlmeidaTensor':
         """Element-wise square root."""
-        if x is None:
-            x = self
-        result = AlmeidaTensor(shape=x._shape, dtype=x._dtype)
-        for i in range(x.size):
-            result._buffer[i] = math.sqrt(max(0, x._buffer[i]))
-        return result
+        src = self if x is None else x
+        return src._map(lambda v: math.sqrt(v if v > 0.0 else 0.0))
 
     def exp(self) -> 'AlmeidaTensor':
         """Element-wise exponential."""
-        result = AlmeidaTensor(shape=self._shape, dtype=self._dtype)
-        for i in range(self.size):
-            result._buffer[i] = math.exp(self._buffer[i])
-        return result
+        return self._map(math.exp)
 
     def log(self) -> 'AlmeidaTensor':
         """Element-wise natural logarithm."""
-        result = AlmeidaTensor(shape=self._shape, dtype=self._dtype)
-        for i in range(self.size):
-            result._buffer[i] = math.log(max(1e-10, self._buffer[i]))
-        return result
+        return self._map(lambda v: math.log(v if v > 1e-10 else 1e-10))
 
     def cos(self) -> 'AlmeidaTensor':
         """Element-wise cosine."""
-        result = AlmeidaTensor(shape=self._shape, dtype=self._dtype)
-        for i in range(self.size):
-            result._buffer[i] = math.cos(self._buffer[i])
-        return result
+        return self._map(math.cos)
 
     def sin(self) -> 'AlmeidaTensor':
         """Element-wise sine."""
-        result = AlmeidaTensor(shape=self._shape, dtype=self._dtype)
-        for i in range(self.size):
-            result._buffer[i] = math.sin(self._buffer[i])
-        return result
+        return self._map(math.sin)
 
     def clamp(self, min_val: float, max_val: float) -> 'AlmeidaTensor':
         """Clamp values to range."""
-        result = AlmeidaTensor(shape=self._shape, dtype=self._dtype)
-        for i in range(self.size):
-            val = self._buffer[i]
-            result._buffer[i] = max(min_val, min(max_val, val))
-        return result
+        return self._map(lambda v: max(min_val, min(max_val, v)))
 
     # -------------------------------------------------------------------------
     # String Representation
@@ -1029,29 +1012,25 @@ def softmax(x: AlmeidaTensor, axis: int = -1) -> AlmeidaTensor:
 
     elif x.ndim == 2:
         rows, cols = x.shape
+        xd, rd = x._buffer._data, result._buffer._data
         if axis == 1:
-            # Softmax over columns (each row independently)
+            # Softmax over the last axis (each row independently, contiguous).
             for r in range(rows):
-                row_start = r * cols
-                # Find max in row
-                max_val = max(x._buffer[row_start + c] for c in range(cols))
-                # Compute exp(x - max)
-                exp_vals = [math.exp(x._buffer[row_start + c] - max_val) for c in range(cols)]
-                sum_exp = sum(exp_vals)
-                # Normalize
-                for c in range(cols):
-                    result._buffer[row_start + c] = exp_vals[c] / sum_exp
+                rb = r * cols
+                seg = xd[rb:rb + cols]
+                mx = max(seg)
+                ex = [math.exp(v - mx) for v in seg]
+                inv = 1.0 / sum(ex)
+                rd[rb:rb + cols] = array.array(rd.typecode, [e * inv for e in ex])
         else:
-            # axis == 0: Softmax over rows (each column independently)
+            # axis == 0: softmax down each column (strided; use array slices).
+            stop = rows * cols
             for c in range(cols):
-                # Find max in column
-                max_val = max(x._buffer[r * cols + c] for r in range(rows))
-                # Compute exp(x - max)
-                exp_vals = [math.exp(x._buffer[r * cols + c] - max_val) for r in range(rows)]
-                sum_exp = sum(exp_vals)
-                # Normalize
-                for r in range(rows):
-                    result._buffer[r * cols + c] = exp_vals[r] / sum_exp
+                col = xd[c:stop:cols]
+                mx = max(col)
+                ex = [math.exp(v - mx) for v in col]
+                inv = 1.0 / sum(ex)
+                rd[c:stop:cols] = array.array(rd.typecode, [e * inv for e in ex])
     else:
         # General ND case: use keepdims broadcast
         x_max = x.max(axis=axis, keepdims=True)
