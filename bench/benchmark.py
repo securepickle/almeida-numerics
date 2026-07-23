@@ -76,7 +76,7 @@ def _np_ln(x, w, eps=1e-5):
 
 
 def timings():
-    section("Matmul (irreducible O(n^3) Python; already on raw buffers)")
+    section("Matmul (O(n^3); inner product via sum(map(mul,...)) in C builtins)")
     for n in (32, 64, 128):
         A, An = mat(n, n); B, Bn = mat(n, n)
         line(f"matmul {n}x{n}", lambda A=A, B=B: A @ B, lambda An=An, Bn=Bn: An @ Bn)

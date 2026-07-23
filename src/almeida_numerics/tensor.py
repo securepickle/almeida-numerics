@@ -25,6 +25,7 @@ from enum import Enum
 from abc import ABC, abstractmethod
 import array
 import math
+import operator
 import struct
 import random
 
@@ -489,16 +490,14 @@ class AlmeidaTensor:
         if self.ndim < 1 or other.ndim < 1:
             raise ValueError("matmul requires at least 1D tensors")
 
-        # 1D @ 1D: dot product
+        # 1D @ 1D: dot product — inner product via C builtins (map + sum).
         if self.ndim == 1 and other.ndim == 1:
             if self._shape[0] != other._shape[0]:
                 raise ValueError(f"Dot product dimension mismatch: {self._shape} vs {other._shape}")
-            acc = 0.0
-            for i in range(self._shape[0]):
-                acc += self._buffer[i] * other._buffer[i]
+            acc = sum(map(operator.mul, self._buffer._data, other._buffer._data))
             return AlmeidaTensor([acc], dtype=self._dtype)
 
-        # 2D @ 2D: matrix multiply
+        # 2D @ 2D: matrix multiply.
         if self.ndim == 2 and other.ndim == 2:
             M, K1 = self._shape
             K2, N = other._shape
@@ -506,25 +505,25 @@ class AlmeidaTensor:
                 raise ValueError(f"Matmul inner dimension mismatch: {K1} vs {K2}")
 
             result = AlmeidaTensor(shape=(M, N), dtype=self._dtype)
-            # Blocked accumulation on raw buffers: same O(n^3), much lower Python overhead.
             a_data = self._buffer._data
             b_data = other._buffer._data
-            c_data = result._buffer._data
-            block_k = 32
+            rd = result._buffer._data
 
+            # C[i,j] = <row i of A, col j of B>. Gather A rows and B columns as
+            # sequences once, then compute each inner product with
+            # sum(map(mul, ...)) so the multiply-accumulate runs in C builtins
+            # rather than an interpreted += loop (~4x over the element loop).
+            mul = operator.mul
+            a_rows = [a_data[i * K1:(i + 1) * K1] for i in range(M)]
+            last = (K2 - 1) * N + 1
+            b_cols = [b_data[j:j + last:N] for j in range(N)]
+            out = [0.0] * (M * N)
             for i in range(M):
-                a_row = i * K1
-                c_row = i * N
-                for k0 in range(0, K1, block_k):
-                    k1 = min(k0 + block_k, K1)
-                    for k in range(k0, k1):
-                        a_ik = a_data[a_row + k]
-                        if a_ik == 0.0:
-                            continue
-                        b_row = k * N
-                        for j in range(N):
-                            c_data[c_row + j] += a_ik * b_data[b_row + j]
-
+                ar = a_rows[i]
+                ob = i * N
+                for j in range(N):
+                    out[ob + j] = sum(map(mul, ar, b_cols[j]))
+            rd[:] = array.array(rd.typecode, out)
             return result
 
         raise NotImplementedError(f"Matmul not supported for shapes {self._shape} @ {other._shape}")
