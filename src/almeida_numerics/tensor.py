@@ -28,6 +28,8 @@ import math
 import struct
 import random
 
+from . import _kernels as _k
+
 
 # =============================================================================
 # DATA TYPES
@@ -1297,42 +1299,36 @@ def qr(A: AlmeidaTensor) -> Tuple[AlmeidaTensor, AlmeidaTensor]:
 
     m, n = A.shape
 
-    # Modified Gram-Schmidt is column-oriented; extract columns as plain lists
-    # once (from the row-major flat buffer) so the O(m*n^2) inner loops run on
-    # Python lists instead of paying per-element __getitem__/_multi_to_flat.
+    # Modified Gram-Schmidt is column-oriented; the public tensor is row-major.
+    # Gather once into a column-major workspace (a flat Python list; column j at
+    # W[j*m : j*m+m], contiguous) and run the O(m*n^2) orthogonalization through
+    # the raw-buffer kernels with stride 1. Workspace layout follows the
+    # algorithm, not the API; a list (not array.array) keeps the kernels' bulk
+    # slice-assignment at list speed.
     ad = A._buffer._data
-    cols = [[ad[i * n + j] for i in range(m)] for j in range(n)]
+    W = [ad[i * n + j] for j in range(n) for i in range(m)]
+
     Rd = [[0.0] * n for _ in range(n)]
-
     for j in range(n):
-        qj = cols[j]
-        norm_sq = 0.0
-        for v in qj:
-            norm_sq += v * v
-        rjj = math.sqrt(norm_sq)
+        jb = j * m
+        rjj = _k.norm2(W, jb, 1, m)
         Rd[j][j] = rjj
-
         if rjj > 1e-10:
-            inv = 1.0 / rjj
-            qj = [v * inv for v in qj]
-            cols[j] = qj
+            _k.scale(W, jb, 1, m, 1.0 / rjj)
+        for c in range(j + 1, n):
+            cb = c * m
+            d = _k.dot(W, jb, 1, W, cb, 1, m)
+            Rd[j][c] = d
+            _k.axpy(W, cb, 1, W, jb, 1, -d, m)
 
-        for k in range(j + 1, n):
-            qk = cols[k]
-            dot = 0.0
-            for a, b in zip(qj, qk):
-                dot += a * b
-            Rd[j][k] = dot
-            cols[k] = [b - dot * a for a, b in zip(qj, qk)]
-
-    # Write columns back into Q (m, n) and R (n, n) via flat buffers.
+    # Write the column-major workspace back into row-major Q, and R.
     Q = zeros((m, n))
     R = zeros((n, n))
     qd, rd = Q._buffer._data, R._buffer._data
     for j in range(n):
-        colj = cols[j]
+        jb = j * m
         for i in range(m):
-            qd[i * n + j] = colj[i]
+            qd[i * n + j] = W[jb + i]
     for r in range(n):
         Rr = Rd[r]
         base = r * n
@@ -1385,41 +1381,32 @@ def svd_power_iteration(
     for i in range(k):
         # Start from a random unit vector.
         v = list(randn((n,))._buffer._data)
-        norm = math.sqrt(sum(x * x for x in v))
-        inv = 1.0 / norm
-        v = [x * inv for x in v]
+        _k.scale(v, 0, 1, n, 1.0 / _k.norm2(v, 0, 1, n))
 
         sigma_old = 0.0
         u = [0.0] * m
 
         for _ in range(max_iter):
-            # u = A @ v  (row-major, contiguous over awd)
+            # u = A @ v : each row of A is a contiguous vector in awd.
             for row in range(m):
-                base = row * n
-                acc = 0.0
-                for col in range(n):
-                    acc += awd[base + col] * v[col]
-                u[row] = acc
+                u[row] = _k.dot(awd, row * n, 1, v, 0, 1, n)
 
-            sigma = math.sqrt(sum(x * x for x in u))
+            sigma = _k.norm2(u, 0, 1, m)
             if sigma < 1e-10:
                 break
-            inv = 1.0 / sigma
-            u = [x * inv for x in u]
+            _k.scale(u, 0, 1, m, 1.0 / sigma)
 
-            # v_new = A.T @ u  (accumulate into columns, row-major over awd)
+            # v_new = A.T @ u : accumulate u[row] * (row of A) into v_new, so the
+            # awd reads stay row-major/contiguous (no strided column walk).
             v_new = [0.0] * n
             for row in range(m):
-                base = row * n
-                ur = u[row]
-                for col in range(n):
-                    v_new[col] += awd[base + col] * ur
+                _k.axpy(v_new, 0, 1, awd, row * n, 1, u[row], n)
 
-            norm = math.sqrt(sum(x * x for x in v_new))
+            norm = _k.norm2(v_new, 0, 1, n)
             if norm < 1e-10:
                 break
-            inv = 1.0 / norm
-            v = [x * inv for x in v_new]
+            _k.scale(v_new, 0, 1, n, 1.0 / norm)
+            v = v_new
 
             if abs(sigma - sigma_old) < tol * sigma:
                 break
@@ -1434,12 +1421,9 @@ def svd_power_iteration(
         for j in range(n):
             vtd[vbase + j] = v[j]
 
-        # Deflate: A_work -= sigma * u (x) v^T
+        # Deflate: A_work -= sigma * u (x) v^T, one row (axpy) at a time.
         for row in range(m):
-            base = row * n
-            su = sigma * u[row]
-            for col in range(n):
-                awd[base + col] -= su * v[col]
+            _k.axpy(awd, row * n, 1, v, 0, 1, -sigma * u[row], n)
 
     return U, S, Vt
 
