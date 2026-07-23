@@ -1277,6 +1277,27 @@ def rope_embed(x: AlmeidaTensor, cos: AlmeidaTensor, sin: AlmeidaTensor,
     return result
 
 
+def scaled_dot_product_attention(q: AlmeidaTensor, k: AlmeidaTensor, v: AlmeidaTensor,
+                                 scale: Optional[float] = None) -> AlmeidaTensor:
+    """
+    Scaled dot-product attention:  softmax(Q Kᵀ / sqrt(d)) @ V.
+
+    Q (n_q, d), K (n_k, d), V (n_k, d_v) -> (n_q, d_v). Built entirely from
+    existing tensor ops: two whole contractions (matmul) around one
+    normalization (softmax) — no new primitive required.
+
+    Args:
+        q, k, v: query / key / value matrices (2D)
+        scale: attention scale, defaults to 1/sqrt(d)
+    """
+    d = q.shape[-1]
+    if scale is None:
+        scale = 1.0 / math.sqrt(d)
+    scores = (q @ k.transpose()) * scale         # (n_q, n_k)
+    weights = softmax(scores, axis=-1)
+    return weights @ v                           # (n_q, d_v)
+
+
 # =============================================================================
 # LINEAR ALGEBRA: SVD, QR, and utilities
 # =============================================================================

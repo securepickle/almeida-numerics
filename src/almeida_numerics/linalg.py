@@ -702,6 +702,48 @@ def lstsq(A: Matrix, b: Vector) -> Vector:
     return x
 
 
+def cg(A: Matrix, b: Vector, x0: Optional[Vector] = None,
+       tol: float = 1e-10, max_iter: Optional[int] = None) -> Vector:
+    """
+    Solve A @ x = b for symmetric positive-definite A by conjugate gradient.
+
+    An iterative solver: each step is one matrix-vector product plus a few
+    vector dot/axpy operations, so it bottoms out entirely at the BLAS-1/2
+    primitives (matvec, dot, scaled vector add) and never forms an inverse.
+
+    Args:
+        A: Symmetric positive-definite matrix (n x n)
+        b: Right-hand side (n)
+        x0: Optional initial guess (defaults to zeros)
+        tol: Stop when the residual L2 norm falls below this
+        max_iter: Iteration cap (defaults to n)
+
+    Returns:
+        Solution vector x (n)
+    """
+    n = len(b)
+    if max_iter is None:
+        max_iter = n
+    x = [0.0] * n if x0 is None else list(x0)
+
+    r = sub_vectors(b, matvec(A, x))             # r = b - A x
+    p = list(r)
+    rs_old = dot(r, r)
+
+    for _ in range(max_iter):
+        if vector_norm(r) < tol:
+            break
+        Ap = matvec(A, p)
+        alpha = rs_old / dot(p, Ap)
+        x = add_vectors(x, scale_vector(alpha, p))
+        r = sub_vectors(r, scale_vector(alpha, Ap))
+        rs_new = dot(r, r)
+        p = add_vectors(r, scale_vector(rs_new / rs_old, p))
+        rs_old = rs_new
+
+    return x
+
+
 # =============================================================================
 # MATRIX INVERSE AND DETERMINANT
 # =============================================================================

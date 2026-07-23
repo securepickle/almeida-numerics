@@ -144,8 +144,15 @@ def test_eig_svd():
           rtol=1e-2, atol=1e-2, note="power iteration")
 
 
+def test_iterative():
+    A, An = spd(6)                                 # symmetric positive-definite
+    b, bn = randv(6)
+    check("cg solves SPD Ax=b", la.cg(A, b), np.linalg.solve(An, bn), rtol=1e-4, atol=1e-5)
+
+
 def main():
-    for fn in (test_basic, test_norms, test_qr, test_lu_cholesky, test_solve, test_eig_svd):
+    for fn in (test_basic, test_norms, test_qr, test_lu_cholesky, test_solve, test_eig_svd,
+               test_iterative):
         try:
             fn()
         except Exception as ex:                    # noqa: BLE001

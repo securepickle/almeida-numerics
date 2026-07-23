@@ -199,6 +199,12 @@ def test_extras():
     t3, t3n = rand(2, 3, 4)
     check("transpose (2,0,1)", t3.transpose((2, 0, 1)), np.transpose(t3n, (2, 0, 1)))
     check("transpose (1,2,0)", t3.transpose((1, 2, 0)), np.transpose(t3n, (1, 2, 0)))
+    # scaled dot-product attention (matmul -> softmax -> matmul)
+    q, qn = rand(4, 8); kk, kn = rand(5, 8); vv, vn = rand(5, 6)
+    s = (qn @ kn.T) / np.sqrt(8)
+    e = np.exp(s - s.max(axis=-1, keepdims=True)); w = e / e.sum(axis=-1, keepdims=True)
+    check("attention softmax(QK^T/sqrt d)V", at.scaled_dot_product_attention(q, kk, vv), w @ vn,
+          rtol=2e-3, atol=2e-3)
     # layer_norm: 1D and 2D, with and without bias
     x1, x1n = rand(8); w, wn = rand(8); bias, biasn = rand(8)
     check("layer_norm 1D no-bias", at.layer_norm(x1, w), _np_layernorm(x1n, wn))
