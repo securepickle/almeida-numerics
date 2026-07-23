@@ -1,0 +1,41 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  validate-against-numpy-scipy:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.8", "3.10", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install package (core has no runtime deps) + test references
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[test]"
+
+      - name: Confirm the core imports with NO third-party packages present
+        run: |
+          # A fresh interpreter that can only see the stdlib + our package.
+          python -c "import almeida_numerics as an; t = an.AlmeidaTensor([[1.0,2.0],[3.0,4.0]]); print('core import OK, (a@a)[0,0] =', (t@t)[0,0])"
+
+      - name: tensor vs NumPy
+        run: python tests/test_tensor_vs_numpy.py
+
+      - name: linalg vs NumPy
+        run: python tests/test_linalg_vs_numpy.py
+
+      - name: stats vs NumPy/SciPy
+        run: python tests/test_stats_vs_scipy.py

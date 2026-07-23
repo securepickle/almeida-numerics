@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "almeida-numerics"
+version = "0.1.0"
+description = "A from-scratch numerical stack (tensor, linalg, stats) in pure Python, validated against NumPy/SciPy."
+readme = "README.md"
+requires-python = ">=3.8"
+license = "Apache-2.0"
+authors = [{ name = "Michael Almeida" }]
+keywords = ["numerics", "linear-algebra", "statistics", "tensor", "pure-python", "from-scratch", "svd", "qr"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Mathematics",
+]
+# No runtime dependencies: the library core is pure standard library.
+dependencies = []
+
+[project.optional-dependencies]
+# Only the test suite (which checks outputs against a trusted reference) needs these.
+test = ["numpy>=1.24", "scipy>=1.10"]
+
+[project.urls]
+Homepage = "https://almeidaindustries.com"
+Source = "https://github.com/securepickle/almeida-numerics"
+
+[tool.setuptools.packages.find]
+where = ["src"]
